@@ -11,7 +11,8 @@ HEADERS = avformat.h                                                    \
           flv.h                                                         \
           id3v2.h                                                       \
           os_support.h                                                  \
-          metadata.h                                                  \
+          metadata.h                                                    \
+          hevc.c                                                        \
 
 OBJS = allformats.o         \
        avio.o               \
@@ -33,6 +34,7 @@ OBJS = allformats.o         \
        utils.o              \
        avc.o                \
        ijkutils.o           \
+       hevc.o               \
 
 OBJS-$(HAVE_LIBC_MSVCRT)                 += file_open.o
 
