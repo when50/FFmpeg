@@ -29,36 +29,41 @@
 
 int ff_tls_init(void)
 {
-#if CONFIG_TLS_PROTOCOL
-#if CONFIG_OPENSSL
+#if CONFIG_TLS_OPENSSL_PROTOCOL
     int ret;
     if ((ret = ff_openssl_init()) < 0)
         return ret;
 #endif
-#if CONFIG_GNUTLS
+#if CONFIG_TLS_GNUTLS_PROTOCOL
     ff_gnutls_init();
-#endif
 #endif
     return 0;
 }
 
 void ff_tls_deinit(void)
 {
-#if CONFIG_TLS_PROTOCOL
-#if CONFIG_OPENSSL
+#if CONFIG_TLS_OPENSSL_PROTOCOL
     ff_openssl_deinit();
 #endif
-#if CONFIG_GNUTLS
+#if CONFIG_TLS_GNUTLS_PROTOCOL
     ff_gnutls_deinit();
 #endif
-#endif
 }
+
+int ff_network_inited_globally;
 
 int ff_network_init(void)
 {
 #if HAVE_WINSOCK2_H
     WSADATA wsaData;
+#endif
 
+    if (!ff_network_inited_globally)
+        av_log(NULL, AV_LOG_WARNING, "Using network protocols without global "
+                                     "network initialization. Please use "
+                                     "avformat_network_init(), this will "
+                                     "become mandatory later.\n");
+#if HAVE_WINSOCK2_H
     if (WSAStartup(MAKEWORD(1,1), &wsaData))
         return 0;
 #endif
@@ -78,41 +83,25 @@ int ff_network_wait_fd_timeout(int fd, int write, int64_t timeout, AVIOInterrupt
 {
     int ret;
     int64_t wait_start = 0;
-
     while (1) {
-        if (ff_check_interrupt(int_cb))
+        if (ff_check_interrupt(int_cb) == AVERROR_EXIT)
             return AVERROR_EXIT;
         if (ff_check_interrupt(int_cb) == AVERROR_QCRP){
             av_log(NULL,AV_LOG_ERROR,"ff_network_wait_fd_timeout AVERROR_QCRP >>> %d",AVERROR_QCRP);
             return AVERROR_QCRP;
         }
+            
+        
         ret = ff_network_wait_fd(fd, write);
         if (ret != AVERROR(EAGAIN))
             return ret;
+
         if (timeout > 0) {
             if (!wait_start)
                 wait_start = av_gettime_relative();
             else if (av_gettime_relative() - wait_start > timeout)
                 return AVERROR(ETIMEDOUT);
         }
-    }
-}
-
-int ff_network_sleep_interruptible(int64_t timeout, AVIOInterruptCB *int_cb)
-{
-    int64_t wait_start = av_gettime_relative();
-
-    while (1) {
-        int64_t time_left;
-
-        if (ff_check_interrupt(int_cb))
-            return AVERROR_EXIT;
-
-        time_left = timeout - (av_gettime_relative() - wait_start);
-        if (time_left <= 0)
-            return AVERROR(ETIMEDOUT);
-
-        av_usleep(FFMIN(time_left, POLLING_TIME * 1000));
     }
 }
 
@@ -166,7 +155,7 @@ static int ff_poll_interrupt(struct pollfd *p, nfds_t nfds, int timeout,
     int ret = 0;
 
     do {
-        if (ff_check_interrupt(cb))
+        if (ff_check_interrupt(cb)==AVERROR_EXIT)
             return AVERROR_EXIT;
         ret = poll(p, nfds, POLLING_TIME);
         if (ret != 0)
@@ -267,7 +256,7 @@ int ff_listen_connect(int fd, const struct sockaddr *addr,
         ret = ff_neterrno();
         switch (ret) {
         case AVERROR(EINTR):
-            if (ff_check_interrupt(&h->interrupt_callback))
+            if (ff_check_interrupt(&h->interrupt_callback)==AVERROR_EXIT)
                 return AVERROR_EXIT;
             continue;
         case AVERROR(EINPROGRESS):
@@ -313,7 +302,7 @@ int ff_sendto(int fd, const char *msg, int msg_len, int flag,
         ret = ff_neterrno();
         switch (ret) {
         case AVERROR(EINTR):
-            if (ff_check_interrupt(&h->interrupt_callback))
+            if (ff_check_interrupt(&h->interrupt_callback)==AVERROR_EXIT)
                 return AVERROR_EXIT;
             continue;
         case AVERROR(EINPROGRESS):
