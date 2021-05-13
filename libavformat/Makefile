@@ -12,7 +12,7 @@ HEADERS = avformat.h                                                    \
           id3v2.h                                                       \
           os_support.h                                                  \
           metadata.h                                                    \
-          hevc.c                                                        \
+          hevc.h                                                        \
 
 OBJS = allformats.o         \
        avio.o               \
