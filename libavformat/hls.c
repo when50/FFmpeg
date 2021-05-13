@@ -2121,34 +2121,38 @@ static int compare_ts_with_wrapdetect(int64_t ts_a, struct playlist *pls_a,
     return av_compare_mod(scaled_ts_a, scaled_ts_b, 1LL << 33);
 }
 
+static int find_timestamp_in_seq_no( struct playlist *pls,int64_t *timestamp, int seq_no)
+{
+    int i;
+    *timestamp=0;
+    for (i = 0; i < seq_no; i++) {
+        *timestamp += pls->segments[i]->duration ;
+    }
+    return 0;
+}
+
 static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     HLSContext *c = s->priv_data;
     int ret, i, minplaylist = -1;
+    int64_t timestamp = AV_NOPTS_VALUE;
 
     recheck_discard_flags(s, c->first_packet);
     c->first_packet = 0;
 
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
+        find_timestamp_in_seq_no(pls,&timestamp,pls->cur_seq_no);
         /* Make sure we've got one buffered packet from each open playlist
          * stream */
         if (pls->needed && !pls->pkt.data) {
             while (1) {
-                int64_t pkt_ts;
                 int64_t ts_diff;
                 AVRational tb;
                 ret = av_read_frame(pls->ctx, &pls->pkt);
                 if (ret < 0) {
-                    //when error occur try to renew m3u8
-                    if (c->hls_io_protocol_enable && (parse_playlist(c, pls->url, pls, NULL)) < 0) {
-                        av_log(NULL, AV_LOG_INFO, "Failed to reload playlist %d\n",
-                               pls->index);
-                    }
-
-                    if (!avio_feof(&pls->pb) && ret != AVERROR_EOF) {
+                    if (!avio_feof(&pls->pb) && ret != AVERROR_EOF)
                         return ret;
-                    }
                     reset_packet(&pls->pkt);
                     break;
                 } else {
@@ -2158,16 +2162,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                         fill_timing_for_id3_timestamped_stream(pls);
                     }
 
-                    if (pls->pkt.pts != AV_NOPTS_VALUE)
-                        pkt_ts =  pls->pkt.pts;
-                    else if (pls->pkt.dts != AV_NOPTS_VALUE)
-                        pkt_ts =  pls->pkt.dts;
-                    else
-                        pkt_ts = AV_NOPTS_VALUE;
-
-
-                    c->first_timestamp = s->start_time != AV_NOPTS_VALUE ? s->start_time : 0;
-
+                    if (c->first_timestamp == AV_NOPTS_VALUE &&
+                        pls->pkt.dts       != AV_NOPTS_VALUE)
+                        c->first_timestamp = av_rescale_q(pls->pkt.dts,
+                            get_timebase(pls), AV_TIME_BASE_Q);
                 }
 
                 if (pls->seek_timestamp == AV_NOPTS_VALUE)
@@ -2176,16 +2174,15 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 if (pls->seek_stream_index < 0 ||
                     pls->seek_stream_index == pls->pkt.stream_index) {
 
-                    if (pkt_ts == AV_NOPTS_VALUE) {
+                    if (pls->pkt.dts == AV_NOPTS_VALUE) {
                         pls->seek_timestamp = AV_NOPTS_VALUE;
                         break;
                     }
 
                     tb = get_timebase(pls);
-                    ts_diff = av_rescale_rnd(pkt_ts, AV_TIME_BASE,
+                    ts_diff = timestamp + av_rescale_rnd(pls->pkt.dts, AV_TIME_BASE,
                                             tb.den, AV_ROUND_DOWN) -
                             pls->seek_timestamp;
-
                     if (ts_diff >= 0 && (pls->seek_flags  & AVSEEK_FLAG_ANY ||
                                         pls->pkt.flags & AV_PKT_FLAG_KEY)) {
                         pls->seek_timestamp = AV_NOPTS_VALUE;
@@ -2216,25 +2213,12 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
     /* If we got a packet, return it */
     if (minplaylist >= 0) {
         struct playlist *pls = c->playlists[minplaylist];
-        AVStream *ist;
-        AVStream *st;
 
         ret = update_streams_from_subdemuxer(s, pls);
         if (ret < 0) {
             av_packet_unref(&pls->pkt);
             reset_packet(&pls->pkt);
             return ret;
-        }
-
-        // If sub-demuxer reports updated metadata, copy it to the first stream
-        // and set its AVSTREAM_EVENT_FLAG_METADATA_UPDATED flag.
-        if (pls->ctx->event_flags & AVFMT_EVENT_FLAG_METADATA_UPDATED) {
-            if (pls->n_main_streams) {
-                st = pls->main_streams[0];
-                av_dict_copy(&st->metadata, pls->ctx->metadata, 0);
-                st->event_flags |= AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
-            }
-            pls->ctx->event_flags &= ~AVFMT_EVENT_FLAG_METADATA_UPDATED;
         }
 
         /* check if noheader flag has been cleared by the subdemuxer */
@@ -2251,27 +2235,14 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             return AVERROR_BUG;
         }
 
-        ist = pls->ctx->streams[pls->pkt.stream_index];
-        st = pls->main_streams[pls->pkt.stream_index];
-
         *pkt = pls->pkt;
-        pkt->stream_index = st->index;
+        pkt->stream_index = pls->main_streams[pls->pkt.stream_index]->index;
         reset_packet(&c->playlists[minplaylist]->pkt);
 
         if (pkt->dts != AV_NOPTS_VALUE)
             c->cur_timestamp = av_rescale_q(pkt->dts,
-                                            ist->time_base,
+                                            pls->ctx->streams[pls->pkt.stream_index]->time_base,
                                             AV_TIME_BASE_Q);
-
-        /* There may be more situations where this would be useful, but this at least
-         * handles newly probed codecs properly (i.e. request_probe by mpegts). */
-        if (ist->codecpar->codec_id != st->codecpar->codec_id) {
-            ret = set_stream_info_from_input_stream(st, pls, ist);
-            if (ret < 0) {
-                av_packet_unref(pkt);
-                return ret;
-            }
-        }
 
         if (c->playlists[minplaylist]->finished) {
             struct playlist *pls = c->playlists[minplaylist];
