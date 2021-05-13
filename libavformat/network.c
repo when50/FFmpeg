@@ -82,6 +82,10 @@ int ff_network_wait_fd_timeout(int fd, int write, int64_t timeout, AVIOInterrupt
     while (1) {
         if (ff_check_interrupt(int_cb))
             return AVERROR_EXIT;
+        if (ff_check_interrupt(int_cb) == AVERROR_QCRP){
+            av_log(NULL,AV_LOG_ERROR,"ff_network_wait_fd_timeout AVERROR_QCRP >>> %d",AVERROR_QCRP);
+            return AVERROR_QCRP;
+        }
         ret = ff_network_wait_fd(fd, write);
         if (ret != AVERROR(EAGAIN))
             return ret;
