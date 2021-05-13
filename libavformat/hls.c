@@ -1893,6 +1893,17 @@ static int compare_ts_with_wrapdetect(int64_t ts_a, struct playlist *pls_a,
     return av_compare_mod(scaled_ts_a, scaled_ts_b, 1LL << 33);
 }
 
+int64_t timestamp = AV_NOPTS_VALUE;//add
+static int find_timestamp_in_seq_no( struct playlist *pls,int64_t *timestamp, int seq_no)
+{
+    int i;
+    *timestamp=0;
+    for (i = 0; i < seq_no; i++) {
+        *timestamp += pls->segments[i]->duration ;
+    }
+    return 0;
+}
+
 static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     HLSContext *c = s->priv_data;
@@ -1903,6 +1914,8 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
+
+        find_timestamp_in_seq_no(pls,&timestamp,pls->cur_seq_no);//add
         /* Make sure we've got one buffered packet from each open playlist
          * stream */
         if (pls->needed && !pls->pkt.data) {
@@ -1940,7 +1953,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                     }
 
                     tb = get_timebase(pls);
-                    ts_diff = av_rescale_rnd(pls->pkt.dts, AV_TIME_BASE,
+                    ts_diff = timestamp + av_rescale_rnd(pls->pkt.dts, AV_TIME_BASE,
                                             tb.den, AV_ROUND_DOWN) -
                             pls->seek_timestamp;
                     if (ts_diff >= 0 && (pls->seek_flags  & AVSEEK_FLAG_ANY ||
