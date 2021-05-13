@@ -83,13 +83,19 @@ int ff_network_wait_fd_timeout(int fd, int write, int64_t timeout, AVIOInterrupt
 {
     int ret;
     int64_t wait_start = 0;
-
     while (1) {
-        if (ff_check_interrupt(int_cb))
+        if (ff_check_interrupt(int_cb) == AVERROR_EXIT)
             return AVERROR_EXIT;
+        if (ff_check_interrupt(int_cb) == AVERROR_QCRP){
+            av_log(NULL,AV_LOG_ERROR,"ff_network_wait_fd_timeout AVERROR_QCRP >>> %d",AVERROR_QCRP);
+            return AVERROR_QCRP;
+        }
+            
+        
         ret = ff_network_wait_fd(fd, write);
         if (ret != AVERROR(EAGAIN))
             return ret;
+
         if (timeout > 0) {
             if (!wait_start)
                 wait_start = av_gettime_relative();
@@ -149,7 +155,7 @@ static int ff_poll_interrupt(struct pollfd *p, nfds_t nfds, int timeout,
     int ret = 0;
 
     do {
-        if (ff_check_interrupt(cb))
+        if (ff_check_interrupt(cb)==AVERROR_EXIT)
             return AVERROR_EXIT;
         ret = poll(p, nfds, POLLING_TIME);
         if (ret != 0)
@@ -250,7 +256,53 @@ int ff_listen_connect(int fd, const struct sockaddr *addr,
         ret = ff_neterrno();
         switch (ret) {
         case AVERROR(EINTR):
-            if (ff_check_interrupt(&h->interrupt_callback))
+            if (ff_check_interrupt(&h->interrupt_callback)==AVERROR_EXIT)
+                return AVERROR_EXIT;
+            continue;
+        case AVERROR(EINPROGRESS):
+        case AVERROR(EAGAIN):
+            ret = ff_poll_interrupt(&p, 1, timeout, &h->interrupt_callback);
+            if (ret < 0)
+                return ret;
+            optlen = sizeof(ret);
+            if (getsockopt (fd, SOL_SOCKET, SO_ERROR, &ret, &optlen))
+                ret = AVUNERROR(ff_neterrno());
+            if (ret != 0) {
+                char errbuf[100];
+                ret = AVERROR(ret);
+                av_strerror(ret, errbuf, sizeof(errbuf));
+                if (will_try_next)
+                    av_log(h, AV_LOG_WARNING,
+                           "Connection to %s failed (%s), trying next address\n",
+                           h->filename, errbuf);
+                else
+                    av_log(h, AV_LOG_ERROR, "Connection to %s failed: %s\n",
+                           h->filename, errbuf);
+            }
+        default:
+            return ret;
+        }
+    }
+    return ret;
+}
+
+int ff_sendto(int fd, const char *msg, int msg_len, int flag,
+                      const struct sockaddr *addr,
+                      socklen_t addrlen, int timeout, URLContext *h,
+                      int will_try_next)
+{
+    struct pollfd p = {fd, POLLOUT, 0};
+    int ret;
+    socklen_t optlen;
+
+    if (ff_socket_nonblock(fd, 1) < 0)
+        av_log(NULL, AV_LOG_INFO, "ff_socket_nonblock failed\n");
+
+    while ((ret = sendto(fd, msg, msg_len, flag, addr, addrlen)) < 0) {
+        ret = ff_neterrno();
+        switch (ret) {
+        case AVERROR(EINTR):
+            if (ff_check_interrupt(&h->interrupt_callback)==AVERROR_EXIT)
                 return AVERROR_EXIT;
             continue;
         case AVERROR(EINPROGRESS):
