@@ -86,6 +86,7 @@ int ff_network_wait_fd_timeout(int fd, int write, int64_t timeout, AVIOInterrupt
             av_log(NULL,AV_LOG_ERROR,"ff_network_wait_fd_timeout AVERROR_QCRP >>> %d",AVERROR_QCRP);
             return AVERROR_QCRP;
         }
+        av_log(NULL,AV_LOG_ERROR,"ABCD ff_network_wait_fd_timeout in while");
         ret = ff_network_wait_fd(fd, write);
         if (ret != AVERROR(EAGAIN))
             return ret;
@@ -111,7 +112,8 @@ int ff_network_sleep_interruptible(int64_t timeout, AVIOInterruptCB *int_cb)
             av_log(NULL,AV_LOG_ERROR,"ff_network_wait_fd_timeout AVERROR_QCRP >>> %d",AVERROR_QCRP);
             return AVERROR_QCRP;
         }
-
+        
+        av_log(NULL,AV_LOG_ERROR,"ABCD ff_network_sleep_interruptible in while");
         time_left = timeout - (av_gettime_relative() - wait_start);
         if (time_left <= 0)
             return AVERROR(ETIMEDOUT);
