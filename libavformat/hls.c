@@ -2281,8 +2281,7 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
     int stream_subdemuxer_index;
     int64_t first_timestamp, seek_timestamp, duration;
 
-    if ((flags & AVSEEK_FLAG_BYTE) ||
-        !(c->variants[0]->playlists[0]->finished || c->variants[0]->playlists[0]->type == PLS_TYPE_EVENT))
+    if ((flags & AVSEEK_FLAG_BYTE) || (c->ctx->ctx_flags & AVFMTCTX_UNSEEKABLE))
         return AVERROR(ENOSYS);
 
     first_timestamp = c->first_timestamp == AV_NOPTS_VALUE ?
@@ -2324,6 +2323,10 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
         struct playlist *pls = c->playlists[i];
         if (pls->input)
             ff_format_io_close(pls->parent, &pls->input);
+        pls->input_read_done = 0;
+        if (pls->input_next)
+            ff_format_io_close(pls->parent, &pls->input_next);
+        pls->input_next_requested = 0;
         av_packet_unref(&pls->pkt);
         reset_packet(&pls->pkt);
         pls->pb.eof_reached = 0;
